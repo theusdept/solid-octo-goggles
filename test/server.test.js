@@ -1,0 +1,13 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {server} from '../runtime/server.js';
+import {setup,cfg} from './helpers.js';
+import {Telegram} from '../runtime/telegram.js';
+async function app(t){const h=setup(),s=server(h.bot,cfg);await new Promise(r=>s.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>s.close(r));h.store.close();});return {...h,url:`http://127.0.0.1:${s.address().port}`};}
+test('webhook rejects missing or incorrect secret',async t=>{const a=await app(t);for(const secret of ['', 'bad']){const r=await fetch(a.url+'/telegram',{method:'POST',headers:{'content-type':'application/json','x-telegram-bot-api-secret-token':secret},body:'{"update_id":1}'});assert.equal(r.status,403);}assert.equal(a.store.pending().length,0);});
+test('authenticated webhook accepts update and duplicate safely',async t=>{const a=await app(t);const init={method:'POST',headers:{'content-type':'application/json','x-telegram-bot-api-secret-token':cfg.secret},body:JSON.stringify({update_id:1,message:{text:'/help',from:{id:2},chat:{type:'private',id:2}}})};assert.equal((await fetch(a.url+'/telegram',init)).status,200);assert.equal((await fetch(a.url+'/telegram',init)).status,200);assert.equal(a.store.pending().length,1);});
+test('malformed webhook JSON rejects cleanly',async t=>{const a=await app(t);assert.equal((await fetch(a.url+'/telegram',{method:'POST',headers:{'content-type':'application/json','x-telegram-bot-api-secret-token':cfg.secret},body:'{'})).status,400);});
+test('policies served and operator HTML escaped',async t=>{const a=await app(t);a.bot.policy.privacy='<script>test</script>';const r=await fetch(a.url+'/privacy');assert.match(await r.text(),/&lt;script&gt;/);assert.match(r.headers.get('content-security-policy'),/frame-ancestors/);});
+test('health is product-specific',async t=>{const a=await app(t);const r=await fetch(a.url+'/health');assert.equal(r.status,200);assert.equal((await r.json()).product,'FASTCOINSWAPbot');});
+test('Telegram error never leaks token',async()=>{const tg=new Telegram('super-secret',{fetchImpl:async()=>new Response(JSON.stringify({ok:false,error_code:401}),{status:401})});await assert.rejects(()=>tg.call('sendMessage',{}),e=>!e.message.includes('super-secret'));});
+test('Telegram rate limit preserves pending delivery',async t=>{const h=setup();t.after(()=>h.store.close());h.store.notify('2',JSON.stringify({text:'test'}));const tg=new Telegram('secret',{fetchImpl:async()=>new Response(JSON.stringify({ok:false,error_code:429,parameters:{retry_after:3}}),{status:429})});await tg.flush(h.store);assert.equal(h.store.pending().length,1);assert.ok(tg.blockedUntil>Date.now());});

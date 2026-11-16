@@ -1,0 +1,34 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {ChangeNOW,ProviderError} from '../runtime/provider.js';
+import {decimal,compare,providerDecimal,config} from '../runtime/validation.js';
+import {btc,eth,order} from './helpers.js';
+const response=(body,status=200,headers={})=>new Response(JSON.stringify(body),{status,headers});
+function client(responses){const calls=[],sleeps=[];return {calls,sleeps,api:new ChangeNOW('test-key',{sleep:async ms=>sleeps.push(ms),fetchImpl:async(url,init)=>{calls.push({url:new URL(url),...init});const next=responses.shift();if(next instanceof Error)throw next;return next;}})};}
+const quote={fromCurrency:'btc',fromNetwork:'btc',toCurrency:'eth',toNetwork:'eth',fromAmount:'1',toAmount:'20',flow:'standard'};
+const session={from:btc,to:eth,amount:'1',address:'destination',flow:'standard',quote};
+test('decimal comparison is exact at 18 fractional places',()=>{assert.equal(compare('0.000000000000000001','0.000000000000000002'),-1);assert.equal(compare('1.000','1'),0);assert.equal(compare('999999999999999999','999999999999999998'),1);});
+for(const v of ['0','-1','NaN','Infinity','1e3','1,000','01','1.0000000000000000001',' 1','1;DROP TABLE'])test(`reject amount ${v}`,()=>assert.throws(()=>decimal(v)));
+test('normalize small provider numbers without exponent',()=>{assert.equal(providerDecimal(1e-8),'0.00000001');assert.equal(providerDecimal(2.5e-7),'0.00000025');});
+test('quote validates range, pair, amount and uses authenticated v2',async()=>{
+ const {api,calls}=client([response({minAmount:'0.1',maxAmount:'2'}),response(quote)]);
+ assert.equal((await api.quote(btc,eth,'1')).toAmount,'20');assert.equal(calls[0].url.pathname,'/v2/exchange/range');
+ assert.equal(calls[1].headers['x-changenow-api-key'],'test-key');assert.equal(calls[1].url.searchParams.get('fromNetwork'),'btc');
+ assert.equal(calls[1].url.searchParams.get('fromAmount'),'1');
+});
+for(const amount of ['0.09','2.01'])test(`reject out-of-range ${amount}`,async()=>{const {api,calls}=client([response({minAmount:'0.1',maxAmount:'2'})]);await assert.rejects(()=>api.quote(btc,eth,amount));assert.equal(calls.length,1);});
+test('reject mismatched quote network',async()=>{const {api}=client([response({minAmount:0.1}),response({...quote,toNetwork:'bsc'})]);await assert.rejects(()=>api.quote(btc,eth,'1'),/PAIR_MISMATCH/);});
+test('fixed rate requires unexpired rate ID',async()=>{const {api}=client([response({minAmount:0.1}),response({...quote,flow:'fixed-rate',rateId:'x',validUntil:'2020-01-01'})]);await assert.rejects(()=>api.quote(btc,eth,'1','fixed-rate'),/EXPIRED_RATE/);});
+test('GET 429 retries with Retry-After',async()=>{const {api,calls,sleeps}=client([response({},429,{'retry-after':'2'}),response([])]);await api.currencies();assert.equal(calls.length,2);assert.ok(sleeps.includes(2000));});
+test('GET server errors retry at most three times',async()=>{const {api,calls}=client([response({},503),response({},503),response({},503)]);await assert.rejects(()=>api.currencies(),/UNAVAILABLE/);assert.equal(calls.length,3);});
+for(const status of [401,403,429,500])test(`POST ${status} is never retried`,async()=>{const {api,calls}=client([response({},status)]);await assert.rejects(()=>api.create(session),e=>e instanceof ProviderError&&e.uncertain===(status===500));assert.equal(calls.length,1);});
+test('POST timeout becomes uncertain and never retries',async()=>{const {api,calls}=client([new Error('timeout')]);await assert.rejects(()=>api.create(session),e=>e.uncertain);assert.equal(calls.length,1);});
+test('create sends exact pair, address, amount and no unrelated identifiers',async()=>{const {api,calls}=client([response(order)]);const r=await api.create(session);assert.equal(r.payinAddress,'provider-deposit');const b=JSON.parse(calls[0].body);assert.equal(b.fromAmount,'1');assert.equal(b.fromNetwork,'btc');assert.equal(b.address,'destination');assert.equal(b.userId,undefined);assert.equal(b.api_key,undefined);});
+for(const edit of [{payinAddress:''},{payoutAddress:'other'},{fromAmount:'NaN'},{toNetwork:'bsc'},{toAmount:null}])test(`malformed successful creation becomes uncertain ${JSON.stringify(edit)}`,async()=>{const {api}=client([response({...order,...edit})]);await assert.rejects(()=>api.create(session),e=>e.uncertain===true);});
+test('deposit memo is mandatory when source asset uses memo',async()=>{const {api}=client([response(order)]);await assert.rejects(()=>api.create({...session,from:{...btc,hasExternalId:true}}),e=>e.uncertain);});
+test('provider address validation uses network not ticker',async()=>{const {api,calls}=client([response({result:true})]);await api.validate({ticker:'usdt',network:'trx'},'address');assert.equal(calls[0].url.searchParams.get('currency'),'trx');});
+test('unsupported or invalid validation fails closed',async()=>{const {api}=client([response({result:false})]);await assert.rejects(()=>api.validate(eth,'bad'));});
+test('multiple networks require explicit selection',async()=>{const {api}=client([response([{...eth},{...eth,network:'bsc'}])]);await assert.rejects(()=>api.select('eth','buy'),/Choose the network/);assert.equal((await api.select('eth:bsc','buy')).network,'bsc');});
+test('status rejects another order ID',async()=>{const {api}=client([response({id:'other',status:'finished'})]);await assert.rejects(()=>api.status(order.id),/BAD_RESPONSE/);});
+test('live startup rejects missing verification flags',()=>{assert.throws(()=>config({PUBLIC_URL:'https://bot.example',TELEGRAM_WEBHOOK_SECRET:'x'.repeat(40),OWNER_TELEGRAM_ID:'1',TELEGRAM_BOT_TOKEN:'123:'+'a'.repeat(30),SUPPORT_CONTACT:'support',OPERATOR_NAME:'test',LIVE_EXCHANGES_ENABLED:'true'}),/prerequisites/);});
+test('fixed creation passes locked rate ID and provider validity',async()=>{const until=new Date(Date.now()+60000).toISOString();const {api,calls}=client([response({...order,flow:'fixed-rate',validUntil:until})]);const r=await api.create({...session,flow:'fixed-rate',quote:{rateId:'locked-rate'}});assert.equal(JSON.parse(calls[0].body).rateId,'locked-rate');assert.equal(r.validUntil,until);});

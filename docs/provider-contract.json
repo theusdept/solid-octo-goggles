@@ -1,0 +1,46 @@
+{
+  "source": "https://documenter.getpostman.com/view/8180765/SVfTPnM8?version=latest",
+  "inspected": "2026-11-15",
+  "note": "Endpoint shapes only; see vendor documentation for the complete contract. No credentials included.",
+  "endpoints": [
+    {
+      "name": "List of available currencies",
+      "method": "GET",
+      "url": "https://api.changenow.io/v2/exchange/currencies?active=&flow=standard&buy=&sell=",
+      "body": null
+    },
+    {
+      "name": "Exchange range",
+      "method": "GET",
+      "url": "https://api.changenow.io/v2/exchange/range?fromCurrency=btc&toCurrency=eth&fromNetwork=btc&toNetwork=eth&flow=standard",
+      "body": null
+    },
+    {
+      "name": "Estimated exchange amount",
+      "method": "GET",
+      "url": "https://api.changenow.io/v2/exchange/estimated-amount?fromCurrency=btc&toCurrency=eth&fromAmount=0.1&toAmount=&fromNetwork=btc&toNetwork=eth&flow=fixed-rate&type=&useRateId=",
+      "body": null
+    },
+    {
+      "name": "Create exchange transaction",
+      "method": "POST",
+      "url": "https://api.changenow.io/v2/exchange",
+      "body": {
+        "mode": "raw",
+        "raw": "{\n    \"fromCurrency\": \"btc\", \n    \"toCurrency\": \"eth\", \n    \"fromNetwork\": \"btc\", \n    \"toNetwork\": \"eth\", \n    \"fromAmount\": \"0.003\", \n    \"address\": \"0x57f31ad4b64095347F87eDB1675566DAfF5EC886\", \n    \"flow\": \"standard\"\n}"
+      }
+    },
+    {
+      "name": "Transaction status",
+      "method": "GET",
+      "url": "https://api.changenow.io/v2/exchange/by-id?id=81cc9c3a9157a6",
+      "body": null
+    },
+    {
+      "name": "Address validation",
+      "method": "GET",
+      "url": "https://api.changenow.io/v2/validate/address?currency=eth&address=0x57f31ad4b64095347F87eDB1675566DAfF5EC886",
+      "body": null
+    }
+  ]
+}
